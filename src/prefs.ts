@@ -3,7 +3,6 @@
 import type Adw from 'gi://Adw';
 
 import Gdk from 'gi://Gdk';
-import GLib from 'gi://GLib';
 import Gtk from 'gi://Gtk';
 
 import {ExtensionPreferences} from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
@@ -34,11 +33,7 @@ export default class RoundedWindowCornersRebornPrefs extends ExtensionPreference
         const display = Gdk.Display.get_default();
         if (display) {
             const css = new Gtk.CssProvider();
-            const path = GLib.build_filenamev([
-                import.meta.url,
-                'stylesheet-prefs.css',
-            ]);
-            css.load_from_path(path);
+            css.load_from_file(this.dir.get_child('stylesheet-prefs.css'));
             Gtk.StyleContext.add_provider_for_display(display, css, 0);
         }
     }

@@ -8,7 +8,7 @@ import type Meta from 'gi://Meta';
 import type Shell from 'gi://Shell';
 
 import {logDebug} from '../utils/log.js';
-import {prefs} from '../utils/settings.js';
+import {desktopSettings, getPref, prefs} from '../utils/settings.js';
 import {hasMetaWindow, type RoundedWindowActor} from '../utils/types.js';
 import * as handlers from './event_handlers.js';
 
@@ -23,6 +23,11 @@ import * as handlers from './event_handlers.js';
 export function enableEffect() {
     // Update the effect when settings are changed.
     connect(prefs, 'changed', handlers.onSettingsChanged);
+    connect(desktopSettings, 'changed::color-scheme', () => {
+        if (getPref('border-color-follow-system')) {
+            handlers.onSettingsChanged();
+        }
+    });
 
     const wm = global.windowManager;
 
