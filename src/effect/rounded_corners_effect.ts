@@ -24,12 +24,14 @@ class Uniforms {
     borderedAreaBounds = 0;
     borderedAreaClipRadius = 0;
     exponent = 0;
-    pixelStep = 0;
+    inverseModelview = 0;
 }
 
 export const RoundedCornersEffect = GObject.registerClass(
     {},
     class Effect extends Shell.GLSLEffect {
+        #blendConfigured = false;
+
         /**
          * To store a uniform value, we need to know its location in the shader,
          * which is done by calling `this.get_uniform_location()`. This is
@@ -49,6 +51,13 @@ export const RoundedCornersEffect = GObject.registerClass(
 
         vfunc_build_pipeline() {
             this.add_glsl_snippet(
+                Cogl.SnippetHook.VERTEX,
+                'uniform mat4 inverseModelview; varying vec2 rwcActorPosition;',
+                `vec4 actorPoint = inverseModelview * cogl_modelview_matrix * cogl_position_in;
+                 rwcActorPosition = actorPoint.xy / actorPoint.w;`,
+                false,
+            );
+            this.add_glsl_snippet(
                 Cogl.SnippetHook.FRAGMENT,
                 declarations,
                 code,
@@ -57,6 +66,35 @@ export const RoundedCornersEffect = GObject.registerClass(
         }
 
         vfunc_paint_target(node: Clutter.PaintNode, ctx: Clutter.PaintContext) {
+            const pipeline = this.get_pipeline();
+            if (!pipeline) return;
+
+            // The offscreen texture includes padding and can change size as a
+            // window moves. Recover actor coordinates from the destination
+            // vertex transform instead of treating that texture as the window
+            // bounds. This also works for clones and offscreen screenshots,
+            // without depending on the destination framebuffer's Y orientation.
+            const framebuffer = ctx.get_framebuffer();
+            const [invertible, inverse] = framebuffer
+                .get_modelview_matrix()
+                .inverse();
+            if (!invertible) return;
+
+            this.set_uniform_matrix(
+                Effect.uniforms.inverseModelview,
+                false,
+                4,
+                inverse.to_float(),
+            );
+            if (!this.#blendConfigured) {
+                // The shader emits premultiplied colors, including edge coverage
+                // and animation opacity. Shell.GLSLEffect defaults to straight
+                // alpha blending, which would multiply that coverage twice.
+                pipeline.set_blend(
+                    'RGBA = ADD (SRC_COLOR, DST_COLOR * (1 - SRC_COLOR[A]))',
+                );
+                this.#blendConfigured = true;
+            }
             updateTextureFilters(this, ctx);
             super.vfunc_paint_target(node, ctx);
         }
@@ -89,28 +127,17 @@ export const RoundedCornersEffect = GObject.registerClass(
                 bounds[3] - borderWidth,
             ];
 
-            let borderedAreaRadius = outerRadius - borderWidth;
-            if (borderedAreaRadius < 0.001) {
-                borderedAreaRadius = 0.0;
-            }
-
-            const pixelStep = [
-                1 / this.actor.get_width(),
-                1 / this.actor.get_height(),
-            ];
-
             // This is needed for squircle corners
-            let exponent = smoothing * 10 + 2;
-            let radius = outerRadius * 0.5 * exponent;
-            const maxRadius = Math.min(
-                bounds[3] - bounds[0],
-                bounds[4] - bounds[1],
+            const exponent = smoothing * 10 + 2;
+            const radius = Math.max(
+                0,
+                Math.min(
+                    outerRadius * 0.5 * exponent,
+                    (bounds[2] - bounds[0]) / 2,
+                    (bounds[3] - bounds[1]) / 2,
+                ),
             );
-            if (radius > maxRadius) {
-                exponent *= maxRadius / radius;
-                radius = maxRadius;
-            }
-            borderedAreaRadius *= radius / outerRadius;
+            const borderedAreaRadius = Math.max(0, radius - borderWidth);
 
             this.#setUniforms(
                 bounds,
@@ -119,7 +146,6 @@ export const RoundedCornersEffect = GObject.registerClass(
                 borderColor,
                 borderedAreaBounds,
                 borderedAreaRadius,
-                pixelStep,
                 exponent,
             );
         }
@@ -131,7 +157,6 @@ export const RoundedCornersEffect = GObject.registerClass(
             borderColor: [number, number, number, number],
             borderedAreaBounds: number[],
             borderedAreaRadius: number,
-            pixelStep: number[],
             exponent: number,
         ) {
             const uniforms = Effect.uniforms;
@@ -147,7 +172,6 @@ export const RoundedCornersEffect = GObject.registerClass(
             this.set_uniform_float(uniforms.borderedAreaClipRadius, 1, [
                 borderedAreaRadius,
             ]);
-            this.set_uniform_float(uniforms.pixelStep, 2, pixelStep);
             this.set_uniform_float(uniforms.exponent, 1, [exponent]);
             this.queue_repaint();
         }

@@ -6,12 +6,38 @@ This directory contains the code for applying GLSL effects to windows.
 
 Due to a bug in GNOME, window shadows are drawn behind window contents. This
 effect loads a simple Fragment shader that clips the shadow behind the window.
+The CSS actor contains a white fill over a black shadow. Subtracting the fill's
+premultiplied RGB from alpha removes the fill even at partially sampled edges;
+a brightness threshold leaves light fringes at fractional scales. The remaining
+alpha keeps the previous shadow strength outside the fill.
 
 ## `rounded_corners_effect.ts`
 
 This effect loads the actual Fragment shader that rounds the corners and draws
 custom borders for the window. The class applies the effect and provides a
 function to change uniforms passed to the effect.
+
+Window bounds and padding are expressed in actor coordinates. Clutter adds
+padding to the offscreen texture and may change its extent as a window moves,
+so multiplying normalized texture coordinates by the actor size is incorrect.
+The vertex shader instead maps the actual vertex modelview transform back
+through the inverse actor modelview. This includes Clutter's texture offset and
+unscale transform without relying on its private buffer-allocation rules, and
+also handles overview clones and screenshot framebuffers.
+
+The fragment shader measures edge coverage using destination-pixel derivatives,
+including straight edges. A one-logical-pixel border therefore covers 1.5 pixels
+at 150% scale instead of alternating between one and two solid pixels. Window
+and border coverage are combined as premultiplied colors, with matching blend
+state, so antialiasing and animation opacity are applied only once. Padding is
+symmetric on all four sides, and corner radii are limited by the actual bounds.
+
+To check borders, use a window with light contents on a dark background at
+100%, 125%, 150%, and 200%. Move it one logical pixel at a time and test odd and
+even window sizes. Check both inner and outer borders, zero corner radius,
+overview previews, and minimize/restore animations. Hiding just the shadow in
+an isolated test session should not change the border's coverage; showing just
+the shadow should never make any background pixel brighter.
 
 ## `texture_filters.ts`
 
