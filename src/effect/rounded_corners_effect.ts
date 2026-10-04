@@ -1,5 +1,6 @@
 /** @file Binds the actual corner rounding shader to the windows. */
 
+import type Clutter from 'gi://Clutter';
 import type {Bounds, RoundedCornerSettings} from '../utils/types.js';
 
 import Cogl from 'gi://Cogl';
@@ -8,6 +9,7 @@ import Shell from 'gi://Shell';
 
 import {readShader} from '../utils/file.js';
 import {getPref} from '../utils/settings.js';
+import {updateTextureFilters} from './texture_filters.js';
 
 const [declarations, code] = await readShader(
     import.meta.url,
@@ -52,6 +54,11 @@ export const RoundedCornersEffect = GObject.registerClass(
                 code,
                 false,
             );
+        }
+
+        vfunc_paint_target(node: Clutter.PaintNode, ctx: Clutter.PaintContext) {
+            updateTextureFilters(this, ctx);
+            super.vfunc_paint_target(node, ctx);
         }
 
         /**

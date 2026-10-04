@@ -74,6 +74,11 @@ function createEffect(actor: RoundedWindowActor) {
         new RoundedCornersEffect(),
     );
 
+    // Fill the full-resolution effect buffer from the original window texture.
+    // Mutter can otherwise choose a reduced mipmap based on the overview clone's
+    // final size and upscale it into this buffer, permanently losing detail.
+    actor.get_texture()?.set_create_mipmaps(false);
+
     const shadow = createShadow(actor);
 
     // Bind properties of the window to the shadow actor.
@@ -119,6 +124,10 @@ function createEffect(actor: RoundedWindowActor) {
 export function onRemoveEffect(actor: RoundedWindowActor) {
     const name = ROUNDED_CORNERS_EFFECT;
     unwrapActor(actor)?.remove_effect_by_name(name);
+
+    if (actor.rwcCustomData) {
+        actor.get_texture()?.set_create_mipmaps(true);
+    }
 
     // Unbind all properties
     for (const binding of actor.rwcCustomData?.propertyBindings || []) {
