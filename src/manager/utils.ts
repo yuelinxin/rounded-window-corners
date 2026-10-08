@@ -19,7 +19,7 @@ import {
 } from '../utils/constants.js';
 import {readFile} from '../utils/file.js';
 import {logDebug} from '../utils/log.js';
-import {getPref} from '../utils/settings.js';
+import {desktopSettings, getPref} from '../utils/settings.js';
 
 /**
  * Get the actor that rounded corners should be applied to.
@@ -50,6 +50,16 @@ export function getRoundedCornersCfg(win: Meta.Window) {
         !customCfgList[win.wmClass] ||
         !customCfgList[win.wmClass].enabled
     ) {
+        if (getPref('border-color-follow-system')) {
+            const dark =
+                desktopSettings.get_string('color-scheme') === 'prefer-dark';
+            return {
+                ...globalCfg,
+                borderColor: getPref(
+                    dark ? 'border-color-dark' : 'border-color-light',
+                ),
+            };
+        }
         return globalCfg;
     }
 

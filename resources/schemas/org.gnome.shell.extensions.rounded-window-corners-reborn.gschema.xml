@@ -40,6 +40,21 @@
       <default>0</default>
     </key>
 
+    <key name="border-color-follow-system" type="b">
+      <summary>Follow the system appearance for the global border color</summary>
+      <default>false</default>
+    </key>
+
+    <key name="border-color-light" type="(dddd)">
+      <summary>Border color in light mode</summary>
+      <default>(0.8156862745, 0.8156862745, 0.8156862745, 1.0)</default>
+    </key>
+
+    <key name="border-color-dark" type="(dddd)">
+      <summary>Border color in dark mode</summary>
+      <default>(0.2509803922, 0.2509803922, 0.2509803922, 1.0)</default>
+    </key>
+
     <key name="global-rounded-corner-settings" type="a{sv}">
       <summary>Global rounded corners settings for all windows</summary>
       <default>

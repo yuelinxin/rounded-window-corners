@@ -33,6 +33,9 @@ export const GeneralPage = GObject.registerClass(
             'skipLibhandy',
             'borderWidth',
             'borderColor',
+            'borderColorFollowSystem',
+            'borderColorLight',
+            'borderColorDark',
             'cornerRadius',
             'cornerSmoothing',
             'keepShadowForMaximizedFullscreen',
@@ -48,6 +51,9 @@ export const GeneralPage = GObject.registerClass(
         private declare _skipLibhandy: Adw.SwitchRow;
         private declare _borderWidth: Gtk.Adjustment;
         private declare _borderColor: Gtk.ColorDialogButton;
+        private declare _borderColorFollowSystem: Adw.SwitchRow;
+        private declare _borderColorLight: Gtk.ColorDialogButton;
+        private declare _borderColorDark: Gtk.ColorDialogButton;
         private declare _cornerRadius: Gtk.Adjustment;
         private declare _cornerSmoothing: Gtk.Adjustment;
         private declare _keepShadowForMaximizedFullscreen: Adw.SwitchRow;
@@ -100,6 +106,31 @@ export const GeneralPage = GObject.registerClass(
                     this.#updateGlobalConfig();
                 },
             );
+
+            bindPref(
+                'border-color-follow-system',
+                this._borderColorFollowSystem,
+                'active',
+                Gio.SettingsBindFlags.DEFAULT,
+            );
+            for (const [key, button] of [
+                ['border-color-light', this._borderColorLight],
+                ['border-color-dark', this._borderColorDark],
+            ] as const) {
+                const color = new Gdk.RGBA();
+                [color.red, color.green, color.blue, color.alpha] =
+                    getPref(key);
+                button.set_rgba(color);
+                button.connect('notify::rgba', () => {
+                    const color = button.get_rgba();
+                    setPref(key, [
+                        color.red,
+                        color.green,
+                        color.blue,
+                        color.alpha,
+                    ]);
+                });
+            }
 
             this._cornerRadius.set_value(this.#settings.borderRadius);
             this._cornerRadius.connect(

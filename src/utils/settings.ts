@@ -4,7 +4,6 @@
  * are used for storing GSettings.
  */
 
-import type Gio from 'gi://Gio';
 import type GObject from 'gi://GObject';
 import type {
     BoxShadow,
@@ -12,6 +11,7 @@ import type {
     RoundedCornerSettings,
 } from './types.js';
 
+import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 
 /** Mapping of schema keys to the JS representation of their type. */
@@ -22,6 +22,9 @@ type Schema = {
     'skip-libadwaita-app': boolean;
     'skip-libhandy-app': boolean;
     'border-width': number;
+    'border-color-follow-system': boolean;
+    'border-color-light': RoundedCornerSettings['borderColor'];
+    'border-color-dark': RoundedCornerSettings['borderColor'];
     'global-rounded-corner-settings': RoundedCornerSettings;
     'custom-rounded-corner-settings': CustomRoundedCornerSettings;
     'focused-shadow': BoxShadow;
@@ -42,6 +45,9 @@ export const Schema = {
     'skip-libadwaita-app': 'b',
     'skip-libhandy-app': 'b',
     'border-width': 'i',
+    'border-color-follow-system': 'b',
+    'border-color-light': '(dddd)',
+    'border-color-dark': '(dddd)',
     'global-rounded-corner-settings': 'a{sv}',
     'custom-rounded-corner-settings': 'a{sv}',
     'focused-shadow': 'a{si}',
@@ -54,6 +60,9 @@ export const Schema = {
 /** The raw GSettings object for direct manipulation. */
 export let prefs: Gio.Settings;
 
+/** Desktop appearance preferences shared by the effect and its event handler. */
+export let desktopSettings: Gio.Settings;
+
 /**
  * Initialize the {@link prefs} object with existing GSettings.
  *
@@ -62,11 +71,15 @@ export let prefs: Gio.Settings;
 export function initPrefs(gSettings: Gio.Settings) {
     resetOutdated(gSettings);
     prefs = gSettings;
+    desktopSettings = new Gio.Settings({
+        schemaId: 'org.gnome.desktop.interface',
+    });
 }
 
 /** Delete the {@link prefs} object for garbage collection. */
 export function uninitPrefs() {
     (prefs as Gio.Settings | null) = null;
+    (desktopSettings as Gio.Settings | null) = null;
 }
 
 /**
