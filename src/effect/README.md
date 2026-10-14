@@ -32,6 +32,20 @@ at full opacity; the final composite applies window/animation opacity once.
 Disabling, detaching, or purging video memory discards the capture. Allocation
 failure falls back to painting the original window.
 
+At the normal, fully opaque, untransformed desktop size, only the four edge
+strips are captured and run through the mask shader. The interior is inset
+beyond both rounded contours and the border's antialiasing region, and paints
+directly through Mutter. The split is snapped inward to the same physical pixel
+grid as the capture. This avoids copying and shading every pixel in a large
+window on every scroll frame. Each strip uses a small buffer with a guard texel for
+filtering, avoiding a full-window texture allocation and reducing the region
+cleared on each scroll frame. Clones, fading, other enabled effects, and transforms
+use the full capture; switching paths invalidates its cached contents.
+
+Effect instances copy one shared shader pipeline, as `Shell.GLSLEffect` does.
+The inverse modelview uniform changes only when the transform changes, and
+texture filtering reuses the pixel mapping already computed for capture.
+
 Normal Wayland Chrome/Chromium browser windows also need their opaque contents
 preserved: their toolbar separator can contain unused transparent texels inside
 an opaque region. Mutter paints that region without blending, but an RGBA
@@ -82,7 +96,21 @@ that hole, and an intentionally translucent patch. It compares the new effect
 against native rendering at 100%, 125%, 150%, and 200%, at odd and even positions.
 The old offscreen path is a negative control that must reproduce the seam at
 fractional scales. It also checks cached versus redrawn contents, disabling and
-re-enabling, overview-sized clones, and the opaque browser separator case.
+re-enabling, overview-sized clones, the opaque browser separator case, opacity
+transitions, one-pixel moves, and content updates in both the interior and edges.
+
+To measure real Chrome scrolling against a Git revision:
+
+```sh
+/usr/bin/python3 tests/rendering.py --scrolling --baseline 936b9d1
+```
+
+This uses the GPU, a 2880×1920 virtual display at 120 Hz, and an isolated Chrome
+profile showing a local scrolling page at 200% and 150%. It alternates the
+baseline and current build twice, with native rendering as a control, and
+prints frame counts, frame intervals, and CPU paint times. The benchmark does
+not change the current desktop or browser profile. Results depend on GPU load
+and are diagnostic measurements, not a timing assertion in the pixel tests.
 
 For a desktop check, use Chrome on a 150% monitor and a 200% monitor. Scroll a
 page or PDF, resize and move the window by one logical pixel, move it across

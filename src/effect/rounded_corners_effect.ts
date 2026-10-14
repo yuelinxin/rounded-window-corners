@@ -1,10 +1,12 @@
 /** @file Binds the actual corner rounding shader to the windows. */
 
+import type Graphene from 'gi://Graphene';
 import type {Bounds, RoundedCornerSettings} from '../utils/types.js';
 
 import Clutter from 'gi://Clutter';
 import Cogl from 'gi://Cogl';
 import GObject from 'gi://GObject';
+import Meta from 'gi://Meta';
 
 import {readShader} from '../utils/file.js';
 import {getPref} from '../utils/settings.js';
@@ -27,11 +29,18 @@ class Uniforms {
     opaqueContents = 0;
 }
 
+// Cogl identifies snippets by identity, not source. Share the immutable shader
+// pipeline just as Shell.GLSLEffect does, so windows reuse one GPU program.
+let basePipeline: Cogl.Pipeline | null = null;
+
 export const RoundedCornersEffect = GObject.registerClass(
     {},
     class Effect extends Clutter.Effect {
         readonly #buffer = new WindowBuffer();
         readonly #pipeline: Cogl.Pipeline;
+        #modelview: Graphene.Matrix | null = null;
+        #interior: Bounds | null = null;
+        #opaqueContents = false;
         #purgeId = 0;
 
         /**
@@ -49,22 +58,29 @@ export const RoundedCornersEffect = GObject.registerClass(
                 .get_context()
                 .get_backend()
                 .get_cogl_context();
-            this.#pipeline = Cogl.Pipeline.new(context);
-            this.#pipeline.set_layer_null_texture(0);
-            this.#pipeline.set_blend(
-                'RGBA = ADD (SRC_COLOR, DST_COLOR * (1 - SRC_COLOR[A]))',
-            );
-            this.#pipeline.add_snippet(
-                Cogl.Snippet.new(
-                    Cogl.SnippetHook.VERTEX,
-                    'uniform mat4 inverseModelview; varying vec2 rwcActorPosition;',
-                    `vec4 actorPoint = inverseModelview * cogl_modelview_matrix * cogl_position_in;
+            if (!basePipeline) {
+                basePipeline = Cogl.Pipeline.new(context);
+                basePipeline.set_layer_null_texture(0);
+                basePipeline.set_blend(
+                    'RGBA = ADD (SRC_COLOR, DST_COLOR * (1 - SRC_COLOR[A]))',
+                );
+                basePipeline.add_snippet(
+                    Cogl.Snippet.new(
+                        Cogl.SnippetHook.VERTEX,
+                        'uniform mat4 inverseModelview; varying vec2 rwcActorPosition;',
+                        `vec4 actorPoint = inverseModelview * cogl_modelview_matrix * cogl_position_in;
                      rwcActorPosition = actorPoint.xy / actorPoint.w;`,
-                ),
-            );
-            this.#pipeline.add_snippet(
-                Cogl.Snippet.new(Cogl.SnippetHook.FRAGMENT, declarations, code),
-            );
+                    ),
+                );
+                basePipeline.add_snippet(
+                    Cogl.Snippet.new(
+                        Cogl.SnippetHook.FRAGMENT,
+                        declarations,
+                        code,
+                    ),
+                );
+            }
+            this.#pipeline = basePipeline.copy();
             for (const k in this.#uniforms) {
                 this.#uniforms[k as keyof Uniforms] =
                     this.#pipeline.get_uniform_location(k);
@@ -80,19 +96,31 @@ export const RoundedCornersEffect = GObject.registerClass(
             if (!actor) return;
             // Cogl may batch rectangles using unit vertices plus a modelview
             // transform. Recover actor coordinates from that final transform.
-            const [invertible, inverse] = ctx
-                .get_framebuffer()
-                .get_modelview_matrix()
-                .inverse();
-            if (!invertible) return;
-            this.#pipeline.set_uniform_matrix(
-                this.#uniforms.inverseModelview,
-                4,
-                1,
-                false,
-                inverse.to_float(),
+            const modelview = ctx.get_framebuffer().get_modelview_matrix();
+            if (!this.#modelview?.equal(modelview)) {
+                const [invertible, inverse] = modelview.inverse();
+                if (!invertible) return;
+                this.#pipeline.set_uniform_matrix(
+                    this.#uniforms.inverseModelview,
+                    4,
+                    1,
+                    false,
+                    inverse.to_float(),
+                );
+                this.#modelview = modelview;
+            }
+            this.#buffer.paint(
+                actor,
+                this.#pipeline,
+                node,
+                ctx,
+                flags,
+                // Mutter honors real windows' declared opaque regions on the
+                // native path. A raw texture needs the alpha repair everywhere.
+                this.#opaqueContents && !(actor instanceof Meta.WindowActor)
+                    ? null
+                    : this.#interior,
             );
-            this.#buffer.paint(actor, this.#pipeline, node, ctx, flags);
         }
 
         vfunc_set_actor(actor: Clutter.Actor | null) {
@@ -132,6 +160,7 @@ export const RoundedCornersEffect = GObject.registerClass(
             windowBounds: Bounds,
             opaqueContents = false,
         ) {
+            this.#opaqueContents = opaqueContents;
             this.#pipeline.set_uniform_float(
                 this.#uniforms.opaqueContents,
                 1,
@@ -169,6 +198,19 @@ export const RoundedCornersEffect = GObject.registerClass(
                 ),
             );
             const borderedAreaRadius = Math.max(0, radius - borderWidth);
+
+            // Inside this rectangle the mask is one and the border is zero.
+            // Keep a guard band for antialiasing and negative-width borders.
+            const inset =
+                Math.max(radius, borderedAreaRadius) +
+                Math.abs(borderWidth) +
+                2;
+            this.#interior = {
+                x1: bounds[0] + inset,
+                y1: bounds[1] + inset,
+                x2: bounds[2] - inset,
+                y2: bounds[3] - inset,
+            };
 
             this.#setUniforms(
                 bounds,
