@@ -10,10 +10,11 @@ uniform vec4 borderColor;
 uniform vec4 borderedAreaBounds;
 uniform float borderedAreaClipRadius;
 uniform float exponent;
+uniform float opaqueContents;
 
 // The vertex shader removes the actor's modelview transform while preserving
-// Clutter's FBO scale and offset. Unlike texture coordinates, these coordinates
-// refer to the actor's content, excluding the offscreen buffer's padding.
+// the rectangle transform used by Cogl's batching. These coordinates refer to
+// the actor's content, excluding the offscreen buffer's padding.
 varying vec2 rwcActorPosition;
 
 float getPointOpacity(vec2 p, vec4 rect, float radius, float power) {
@@ -50,6 +51,13 @@ float getPointOpacity(vec2 p, vec4 rect, float radius, float power) {
 void main() {
     vec2 p = rwcActorPosition;
     float pointAlpha = getPointOpacity(p, bounds, clipRadius, exponent);
+
+    // Chrome can leave transparent texels inside its declared opaque window
+    // contents (notably the toolbar separator). Mutter paints that region
+    // without blending; an RGBA offscreen capture preserves the unused alpha,
+    // which must not turn into desktop transparency on the final composite.
+    if (opaqueContents > 0.5)
+        cogl_color_out.a = cogl_color_in.a;
 
     if (borderWidth > 0.9 || borderWidth < -0.9) {
         // Window pixels already include paint opacity. Fade borders with them.

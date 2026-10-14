@@ -34,6 +34,30 @@ export function unwrapActor(actor: RoundedWindowActor) {
     return type === Meta.WindowClientType.X11 ? actor.get_first_child() : actor;
 }
 
+/** Normal Chrome/Chromium browser windows have opaque client contents. */
+export function hasOpaqueBrowserContents(win: Meta.Window) {
+    if (
+        win.get_client_type() !== Meta.WindowClientType.WAYLAND ||
+        win.windowType !== Meta.WindowType.NORMAL
+    )
+        return false;
+
+    // Do not use isChromium(): Electron apps may deliberately be translucent.
+    const wmClass = win.wmClass?.toLowerCase();
+    return (
+        wmClass !== undefined &&
+        [
+            'google-chrome',
+            'google-chrome-beta',
+            'google-chrome-unstable',
+            'chromium',
+            'chromium-browser',
+            'com.google.chrome',
+            'org.chromium.chromium',
+        ].includes(wmClass)
+    );
+}
+
 /**
  * Get the correct rounded corner setting for a window (custom settings if a
  * window has custom overrides, global settings otherwise).
