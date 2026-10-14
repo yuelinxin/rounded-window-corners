@@ -17,13 +17,29 @@ This effect loads the actual Fragment shader that rounds the corners and draws
 custom borders for the window. The class applies the effect and provides a
 function to change uniforms passed to the effect.
 
-Window bounds and padding are expressed in actor coordinates. Clutter adds
-padding to the offscreen texture and may change its extent as a window moves,
-so multiplying normalized texture coordinates by the actor size is incorrect.
-The vertex shader instead maps the actual vertex modelview transform back
-through the inverse actor modelview. This includes Clutter's texture offset and
-unscale transform without relying on its private buffer-allocation rules, and
-also handles overview clones and screenshot framebuffers.
+Window bounds and padding are expressed in actor coordinates. The vertex shader
+maps Cogl's actual vertex modelview transform back through the inverse actor
+modelview, since Cogl can batch rectangles using unit vertices. This also works
+for overview clones and screenshot framebuffers.
+
+`window_buffer.ts` captures the window at the highest **fractional** scale of its
+stage views. Clutter's default offscreen effect rounds 150% up to 200%, then
+scales back down. This filters transparent holes in a parent surface separately
+from the subsurfaces filling them, creating a desktop-colored seam. The custom
+buffer preserves the destination pixel phase as well as the scale, and
+invalidates cached contents when either changes. Source contents are captured
+at full opacity; the final composite applies window/animation opacity once.
+Disabling, detaching, or purging video memory discards the capture. Allocation
+failure falls back to painting the original window.
+
+Normal Wayland Chrome/Chromium browser windows also need their opaque contents
+preserved: their toolbar separator can contain unused transparent texels inside
+an opaque region. Mutter paints that region without blending, but an RGBA
+capture retains those alpha values. For the explicit browser WM classes in
+`hasOpaqueBrowserContents`, the shader restores opaque alpha before applying
+our window mask and animation opacity. Electron apps and other applications
+retain their original alpha; Chromium process detection is deliberately not
+used for this decision.
 
 The fragment shader measures edge coverage using destination-pixel derivatives,
 including straight edges. A one-logical-pixel border therefore covers 1.5 pixels
@@ -41,39 +57,40 @@ the shadow should never make any background pixel brighter.
 
 ## `texture_filters.ts`
 
-The effect selects texture filters on every paint, including cached paints.
-Clutter can otherwise reset them to nearest-neighbor filtering when an actor's
-highest monitor scale is an integer. A window spanning 200% and 150% monitors
-can then have jagged text on the 150% monitor, including when only its
-client-side shadow crosses the edge.
+The effect selects texture filters on every paint, including cached paints,
+using the actual source buffer scale. A 2x source painted on a 1.5x monitor is
+scaled to 0.75, not 1.5. Linear filtering preserves detail above half size;
+below half size in both dimensions, `LINEAR_MIPMAP_NEAREST` matches Mutter's
+native window texture rendering. Overview previews need no second effect.
 
-Following [PR #170](https://github.com/flexagoon/rounded-window-corners/pull/170),
-the source window's mipmaps are disabled while the effect is attached. This
-prevents a low-resolution window copy being enlarged into the full-resolution
-effect buffer in the overview. Removing the effect restores source mipmaps.
-The result uses linear filtering. Below 50% scale in both dimensions it uses
-`LINEAR_MIPMAP_NEAREST`, matching Mutter's native window texture rendering:
-choose the nearest mipmap level and interpolate linearly within that level.
-This avoids both undersampling small text and blurring it by blending mipmap
-levels. Overview previews no longer need a second offscreen effect.
+The source window's mipmaps are disabled while the effect is attached, following
+[PR #170](https://github.com/flexagoon/rounded-window-corners/pull/170), and
+restored when it is removed.
 
-The projected size of a logical unit must be divided by the actor's integer
-resource scale to measure the size of an offscreen texel. Clutter applies that
-division in a paint node after `paint_target` builds the nodes. For example,
-a 2x texture painted on a 1.5x monitor is scaled to 0.75, not 1.5. The framebuffer
-transform also accounts for overview clones and animations.
+## Rendering regression tests
 
-This fixes the mixed-scale sampling artifacts, but does not remove Clutter's
-intermediate buffer. That buffer uses a rounded-up integer resource scale, so
-native fractional-scale clients can still undergo an extra resampling pass.
-See [Clutter's offscreen rendering implementation](https://github.com/GNOME/mutter/blob/50.5/clutter/clutter/clutter-offscreen-effect.c).
-[Mutter !5179](https://gitlab.gnome.org/GNOME/mutter/-/merge_requests/5179)
-proposes a separate fix for buffer sizing and pixel alignment.
+Run `/usr/bin/python3 tests/rendering.py` from the repository root after
+installing the development dependencies. This requires GNOME Shell 50,
+`dbus-run-session`, `gsettings`, Python GI, and Pillow. It compiles into a
+fresh temporary directory and runs a software-rendered headless compositor
+with an isolated D-Bus session, settings, and extension directory. The normal
+desktop is not modified. The compositor is stopped after the tests; screenshots
+and logs remain in the printed temporary directory.
 
-To check this, place a window across a 150%/200% monitor boundary, redraw its
-contents (for example, type into a text field), and compare text with the
-extension disabled. Also move it fully onto each monitor and check overview
-previews and minimize/restore animations.
+The fixture contains a parent texture with a transparent hole, a child filling
+that hole, and an intentionally translucent patch. It compares the new effect
+against native rendering at 100%, 125%, 150%, and 200%, at odd and even positions.
+The old offscreen path is a negative control that must reproduce the seam at
+fractional scales. It also checks cached versus redrawn contents, disabling and
+re-enabling, overview-sized clones, and the opaque browser separator case.
+
+For a desktop check, use Chrome on a 150% monitor and a 200% monitor. Scroll a
+page or PDF, resize and move the window by one logical pixel, move it across
+the monitor boundary, and enter/leave the overview. Check translucent terminal
+windows as well. Reference implementations:
+[Clutter offscreen effects](https://github.com/GNOME/mutter/blob/50.5/clutter/clutter/clutter-offscreen-effect.c),
+[Mutter surface alignment](https://github.com/GNOME/mutter/blob/50.5/src/compositor/meta-surface-actor-wayland.c),
+and [Mutter opaque-region painting](https://github.com/GNOME/mutter/blob/50.5/src/compositor/meta-shaped-texture.c).
 
 ## `shader`
 

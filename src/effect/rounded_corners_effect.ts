@@ -1,15 +1,14 @@
 /** @file Binds the actual corner rounding shader to the windows. */
 
-import type Clutter from 'gi://Clutter';
 import type {Bounds, RoundedCornerSettings} from '../utils/types.js';
 
+import Clutter from 'gi://Clutter';
 import Cogl from 'gi://Cogl';
 import GObject from 'gi://GObject';
-import Shell from 'gi://Shell';
 
 import {readShader} from '../utils/file.js';
 import {getPref} from '../utils/settings.js';
-import {updateTextureFilters} from './texture_filters.js';
+import {WindowBuffer} from './window_buffer.js';
 
 const [declarations, code] = await readShader(
     import.meta.url,
@@ -25,78 +24,99 @@ class Uniforms {
     borderedAreaClipRadius = 0;
     exponent = 0;
     inverseModelview = 0;
+    opaqueContents = 0;
 }
 
 export const RoundedCornersEffect = GObject.registerClass(
     {},
-    class Effect extends Shell.GLSLEffect {
-        #blendConfigured = false;
+    class Effect extends Clutter.Effect {
+        readonly #buffer = new WindowBuffer();
+        readonly #pipeline: Cogl.Pipeline;
+        #purgeId = 0;
 
         /**
          * To store a uniform value, we need to know its location in the shader,
-         * which is done by calling `this.get_uniform_location()`. This is
+         * which is done by calling `pipeline.get_uniform_location()`. This is
          * expensive, so we cache the location of uniforms when the shader is
          * created.
          */
-        static uniforms: Uniforms = new Uniforms();
+        readonly #uniforms = new Uniforms();
 
         constructor() {
             super();
 
-            for (const k in Effect.uniforms) {
-                Effect.uniforms[k as keyof Uniforms] =
-                    this.get_uniform_location(k);
+            const context = global.stage
+                .get_context()
+                .get_backend()
+                .get_cogl_context();
+            this.#pipeline = Cogl.Pipeline.new(context);
+            this.#pipeline.set_layer_null_texture(0);
+            this.#pipeline.set_blend(
+                'RGBA = ADD (SRC_COLOR, DST_COLOR * (1 - SRC_COLOR[A]))',
+            );
+            this.#pipeline.add_snippet(
+                Cogl.Snippet.new(
+                    Cogl.SnippetHook.VERTEX,
+                    'uniform mat4 inverseModelview; varying vec2 rwcActorPosition;',
+                    `vec4 actorPoint = inverseModelview * cogl_modelview_matrix * cogl_position_in;
+                     rwcActorPosition = actorPoint.xy / actorPoint.w;`,
+                ),
+            );
+            this.#pipeline.add_snippet(
+                Cogl.Snippet.new(Cogl.SnippetHook.FRAGMENT, declarations, code),
+            );
+            for (const k in this.#uniforms) {
+                this.#uniforms[k as keyof Uniforms] =
+                    this.#pipeline.get_uniform_location(k);
             }
         }
 
-        vfunc_build_pipeline() {
-            this.add_glsl_snippet(
-                Cogl.SnippetHook.VERTEX,
-                'uniform mat4 inverseModelview; varying vec2 rwcActorPosition;',
-                `vec4 actorPoint = inverseModelview * cogl_modelview_matrix * cogl_position_in;
-                 rwcActorPosition = actorPoint.xy / actorPoint.w;`,
-                false,
-            );
-            this.add_glsl_snippet(
-                Cogl.SnippetHook.FRAGMENT,
-                declarations,
-                code,
-                false,
-            );
-        }
-
-        vfunc_paint_target(node: Clutter.PaintNode, ctx: Clutter.PaintContext) {
-            const pipeline = this.get_pipeline();
-            if (!pipeline) return;
-
-            // The offscreen texture includes padding and can change size as a
-            // window moves. Recover actor coordinates from the destination
-            // vertex transform instead of treating that texture as the window
-            // bounds. This also works for clones and offscreen screenshots,
-            // without depending on the destination framebuffer's Y orientation.
-            const framebuffer = ctx.get_framebuffer();
-            const [invertible, inverse] = framebuffer
+        vfunc_paint(
+            node: Clutter.PaintNode,
+            ctx: Clutter.PaintContext,
+            flags: Clutter.EffectPaintFlags,
+        ) {
+            const actor = this.actor;
+            if (!actor) return;
+            // Cogl may batch rectangles using unit vertices plus a modelview
+            // transform. Recover actor coordinates from that final transform.
+            const [invertible, inverse] = ctx
+                .get_framebuffer()
                 .get_modelview_matrix()
                 .inverse();
             if (!invertible) return;
-
-            this.set_uniform_matrix(
-                Effect.uniforms.inverseModelview,
-                false,
+            this.#pipeline.set_uniform_matrix(
+                this.#uniforms.inverseModelview,
                 4,
+                1,
+                false,
                 inverse.to_float(),
             );
-            if (!this.#blendConfigured) {
-                // The shader emits premultiplied colors, including edge coverage
-                // and animation opacity. Shell.GLSLEffect defaults to straight
-                // alpha blending, which would multiply that coverage twice.
-                pipeline.set_blend(
-                    'RGBA = ADD (SRC_COLOR, DST_COLOR * (1 - SRC_COLOR[A]))',
-                );
-                this.#blendConfigured = true;
+            this.#buffer.paint(actor, this.#pipeline, node, ctx, flags);
+        }
+
+        vfunc_set_actor(actor: Clutter.Actor | null) {
+            // set_actor can run during construction, before private fields exist.
+            if (#buffer in this) {
+                this.#buffer.clear();
+                this.#pipeline.set_layer_null_texture(0);
+                if (this.#purgeId) global.stage.disconnect(this.#purgeId);
+                this.#purgeId = actor
+                    ? global.stage.connect('gl-video-memory-purged', () => {
+                          this.#buffer.clear();
+                          this.queue_repaint();
+                      })
+                    : 0;
             }
-            updateTextureFilters(this, ctx);
-            super.vfunc_paint_target(node, ctx);
+            super.vfunc_set_actor(actor);
+        }
+
+        vfunc_set_enabled(enabled: boolean) {
+            if (#buffer in this) {
+                this.#buffer.clear();
+                this.#pipeline.set_layer_null_texture(0);
+            }
+            super.vfunc_set_enabled(enabled);
         }
 
         /**
@@ -105,8 +125,19 @@ export const RoundedCornersEffect = GObject.registerClass(
          *
          * @param config - Rounded corners configuration
          * @param windowBounds - Bounds of the window without padding
+         * @param opaqueContents - Restore the browser client's opaque contents
          */
-        updateUniforms(config: RoundedCornerSettings, windowBounds: Bounds) {
+        updateUniforms(
+            config: RoundedCornerSettings,
+            windowBounds: Bounds,
+            opaqueContents = false,
+        ) {
+            this.#pipeline.set_uniform_float(
+                this.#uniforms.opaqueContents,
+                1,
+                1,
+                [Number(opaqueContents)],
+            );
             const borderWidth = getPref('border-width');
             const borderColor = config.borderColor;
 
@@ -159,20 +190,35 @@ export const RoundedCornersEffect = GObject.registerClass(
             borderedAreaRadius: number,
             exponent: number,
         ) {
-            const uniforms = Effect.uniforms;
-            this.set_uniform_float(uniforms.bounds, 4, bounds);
-            this.set_uniform_float(uniforms.clipRadius, 1, [radius]);
-            this.set_uniform_float(uniforms.borderWidth, 1, [borderWidth]);
-            this.set_uniform_float(uniforms.borderColor, 4, borderColor);
-            this.set_uniform_float(
+            const uniforms = this.#uniforms;
+            this.#pipeline.set_uniform_float(uniforms.bounds, 4, 1, bounds);
+            this.#pipeline.set_uniform_float(uniforms.clipRadius, 1, 1, [
+                radius,
+            ]);
+            this.#pipeline.set_uniform_float(uniforms.borderWidth, 1, 1, [
+                borderWidth,
+            ]);
+            this.#pipeline.set_uniform_float(
+                uniforms.borderColor,
+                4,
+                1,
+                borderColor,
+            );
+            this.#pipeline.set_uniform_float(
                 uniforms.borderedAreaBounds,
                 4,
+                1,
                 borderedAreaBounds,
             );
-            this.set_uniform_float(uniforms.borderedAreaClipRadius, 1, [
-                borderedAreaRadius,
+            this.#pipeline.set_uniform_float(
+                uniforms.borderedAreaClipRadius,
+                1,
+                1,
+                [borderedAreaRadius],
+            );
+            this.#pipeline.set_uniform_float(uniforms.exponent, 1, 1, [
+                exponent,
             ]);
-            this.set_uniform_float(uniforms.exponent, 1, [exponent]);
             this.queue_repaint();
         }
     },

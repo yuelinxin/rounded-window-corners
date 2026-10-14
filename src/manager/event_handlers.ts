@@ -24,6 +24,7 @@ import {
     computeWindowContentsOffset,
     getRoundedCornersCfg,
     getRoundedCornersEffect,
+    hasOpaqueBrowserContents,
     isChromium,
     shouldEnableEffect,
     unwrapActor,
@@ -360,7 +361,11 @@ function updateEffect(actor: RoundedWindowActor) {
 
     const cfg = getRoundedCornersCfg(win);
     const windowContentOffset = computeWindowContentsOffset(win);
-    effect.updateUniforms(cfg, computeBounds(actor, windowContentOffset));
+    effect.updateUniforms(
+        cfg,
+        computeBounds(actor, windowContentOffset),
+        hasOpaqueBrowserContents(win),
+    );
 
     const shadow = windowInfo.shadow;
     const offsets = computeShadowActorOffset(windowContentOffset);
