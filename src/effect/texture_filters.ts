@@ -53,10 +53,10 @@ export function getFramebufferMapping(paintContext: Clutter.PaintContext) {
 /** Select filters using the actual number of source texels per logical unit. */
 export function updateTextureFilters(
     pipeline: Cogl.Pipeline,
-    paintContext: Clutter.PaintContext,
+    mapping: ReturnType<typeof getFramebufferMapping>,
     sourceScale: number,
 ) {
-    const {rightX, rightY, downX, downY} = getFramebufferMapping(paintContext);
+    const {rightX, rightY, downX, downY} = mapping;
     const scale =
         Math.max(Math.hypot(rightX, rightY), Math.hypot(downX, downY)) /
         sourceScale;

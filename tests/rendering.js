@@ -178,6 +178,30 @@ export async function run(scale) {
             root.queue_redraw();
             await delay();
             await capture(`${prefix}-redrawn`);
+            root.opacity = 128;
+            await delay();
+            await capture(`${prefix}-faded`);
+            root.opacity = 255;
+            await delay();
+            await capture(`${prefix}-restored`);
+
+            // Exercise both the native interior and captured edge strips with
+            // new content, not just a redraw of an unchanged texture.
+            const child = root.get_first_child().get_first_child();
+            child.backgroundColor = new Cogl.Color({
+                red: 170,
+                green: 200,
+                blue: 100,
+                alpha: 255,
+            });
+            await delay();
+            await capture(`${prefix}-updated`);
+            child.backgroundColor = new Cogl.Color({
+                red: 220,
+                green: 220,
+                blue: 220,
+                alpha: 255,
+            });
             effect.enabled = false;
             await delay();
             effect.enabled = true;
@@ -197,6 +221,12 @@ export async function run(scale) {
             await delay();
             await capture(`${prefix}-clone-redrawn`);
             clone.destroy();
+            root.set_position(position + 1, position + 1);
+            await delay();
+            await capture(`${prefix}-moved`);
+            effect.enabled = false;
+            await delay();
+            await capture(`${prefix}-moved-native`);
             root.destroy();
         }
         const root = fixture(background, scale, 40, true);
